@@ -28,6 +28,8 @@
 #include "coop_patch.h"
 #include "snes_netplay.h"
 #include "snes_host_session.h"
+#include "snes_host_lobby.h"
+#include "snes_host_app.h"
 #include "smw_netplay_lobby.h"
 #endif
 #include "util.h"
@@ -1102,7 +1104,7 @@ int main(int argc, char** argv) {
       gi.config_path = config_file;  /* hotkey editor targets the live config */
 #if defined(RECOMP_LAUNCHER) && defined(SMW_COOP_BUILD)
       gi.netplay_supported = 1;
-      gi.netplay = SmwNetplayLauncherCallbacks();
+      gi.netplay = SmwNetplayLauncherCallbacks(); /* → snes_host_lobby_* */
 #endif
 
 #if defined(RECOMP_LAUNCHER)
@@ -1972,14 +1974,9 @@ error_reading:;
     RecompLauncherCGameInfo gi;
     RecompLauncherCNetplayLaunch net;
     char resumed_rom[1024] = "";
-    const char *resume_endpoint;
     int act;
 
-    /* Keep the seat and transport signaling connection, but turn a completed
-     * match back into a not-started waiting room before recomp-ui resumes it. */
-    SmwNetplayLauncherPrepareRematch();
-    resume_endpoint = SmwNetplayLauncherResumeEndpoint();
-    snes_netplay_clear_return_to_lobby();
+    /* Soft-return: keep lobby WebSocket; reopen MotK/LAN waiting room. */
     g_netplay_from_lobby = 0;
     g_netplay_pending = 0;
     g_netplay_started = 0;
@@ -2018,8 +2015,7 @@ error_reading:;
     gi.config_path = config_file;
     gi.netplay_supported = 1;
     gi.netplay = SmwNetplayLauncherCallbacks();
-    gi.resume_netplay_room = 1;
-    gi.resume_netplay_endpoint = resume_endpoint;
+    snes_host_app_begin_soft_return(&gi, /*set_resume_room=*/1);
 
     act = recomp_launcher_run_window(
         "Super Mario World Co-op - Launcher", &ls, &gi, ".",
@@ -2207,7 +2203,7 @@ static void NetplaySoftExit(const char *origin) {
 
 static void NetplayReportError(const char *error_code, const char *message) {
   const char *suppress_dialog = getenv("SNES_NET_SUPPRESS_ERROR_DIALOG");
-  SmwNetplayLauncherSetRuntimeError(error_code);
+  snes_host_lobby_set_runtime_error(error_code);
   fprintf(stderr, "snes_netplay: %s: %s\n",
           error_code ? error_code : "error", message ? message : "");
   host_report_breadcrumb("netplay: error=%s transport=%s",
