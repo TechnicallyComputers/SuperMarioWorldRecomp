@@ -939,25 +939,13 @@ int main(int argc, char** argv) {
         SmwNetplayLauncherDisconnect();
         return 2;
       }
-      snes_netplay_config_defaults(&g_netplay_cfg);
-      g_netplay_cfg.enabled = 1;
-      g_netplay_cfg.local_slot = net.local_slot;
-      g_netplay_cfg.input_player =
-          (net.input_player == 0 || net.input_player == 1)
-              ? net.input_player : -1;
-      g_netplay_cfg.session_id = net.session_id ? net.session_id : 1u;
-      g_netplay_cfg.transport = 0;
-      snprintf(g_netplay_cfg.bind_hostport,
-               sizeof(g_netplay_cfg.bind_hostport), "%s",
-               net.bind_hostport);
-      snprintf(g_netplay_cfg.peer_hostport,
-               sizeof(g_netplay_cfg.peer_hostport), "%s",
-               net.peer_hostport);
-      snes_netplay_apply_env(&g_netplay_cfg);
-      if (net.input_delay >= 0 && net.input_delay <= 16)
-        g_netplay_cfg.input_delay = net.input_delay;
-      g_netplay_pending = 1;
-      g_netplay_from_lobby = 1;
+      {
+        SnesHostLaunchResult lr;
+        snes_host_app_apply_launch(&net, &lr);
+        g_netplay_cfg = lr.net_cfg;
+        g_netplay_pending = lr.netplay_enabled;
+        g_netplay_from_lobby = lr.from_lobby;
+      }
     }
   }
 #endif
@@ -1196,23 +1184,9 @@ int main(int argc, char** argv) {
         ConfigReloadKeyMap(config_file);
 #if defined(RECOMP_LAUNCHER) && defined(SMW_COOP_BUILD)
         if (net.enabled) {
-          snes_netplay_config_defaults(&g_netplay_cfg);
-          g_netplay_cfg.enabled = 1;
-          g_netplay_cfg.local_slot = net.local_slot;
-          g_netplay_cfg.input_player =
-              (net.input_player == 0 || net.input_player == 1)
-                  ? net.input_player : -1;
-          g_netplay_cfg.session_id = net.session_id ? net.session_id : 1u;
-          g_netplay_cfg.transport = 0;
-          snprintf(g_netplay_cfg.bind_hostport,
-                   sizeof(g_netplay_cfg.bind_hostport), "%s",
-                   net.bind_hostport);
-          snprintf(g_netplay_cfg.peer_hostport,
-                   sizeof(g_netplay_cfg.peer_hostport), "%s",
-                   net.peer_hostport);
-          snes_netplay_apply_env(&g_netplay_cfg);
-          if (net.input_delay >= 0 && net.input_delay <= 16)
-            g_netplay_cfg.input_delay = net.input_delay;
+          SnesHostLaunchResult lr;
+          snes_host_app_apply_launch(&net, &lr);
+          g_netplay_cfg = lr.net_cfg;
           g_netplay_pending = 1;
           g_netplay_from_lobby = 1;
           host_report_breadcrumb(
@@ -2045,21 +2019,9 @@ error_reading:;
       WriteConfigFile(config_file);
 
       if (net.enabled) {
-        snes_netplay_config_defaults(&g_netplay_cfg);
-        g_netplay_cfg.enabled = 1;
-        g_netplay_cfg.local_slot = net.local_slot;
-        g_netplay_cfg.input_player =
-            (net.input_player == 0 || net.input_player == 1)
-                ? net.input_player : -1;
-        g_netplay_cfg.session_id = net.session_id ? net.session_id : 1u;
-        g_netplay_cfg.transport = 0;
-        snprintf(g_netplay_cfg.bind_hostport,
-                 sizeof(g_netplay_cfg.bind_hostport), "%s", net.bind_hostport);
-        snprintf(g_netplay_cfg.peer_hostport,
-                 sizeof(g_netplay_cfg.peer_hostport), "%s", net.peer_hostport);
-        snes_netplay_apply_env(&g_netplay_cfg);
-        if (net.input_delay >= 0 && net.input_delay <= 16)
-          g_netplay_cfg.input_delay = net.input_delay;
+        SnesHostLaunchResult lr;
+        snes_host_app_apply_launch(&net, &lr);
+        g_netplay_cfg = lr.net_cfg;
         g_netplay_pending = 1;
         g_netplay_from_lobby = 1;
         free(kRom);
@@ -2271,17 +2233,8 @@ static void SmwNetplayPollEvents(void *ctx, int *want_soft_exit) {
 static void SmwNetplayOnConnectTimeout(void *ctx) {
   const int is_ice = strcmp(snes_netplay_transport_name(), "ice") == 0;
   (void)ctx;
-  NetplayReportError(
-      is_ice ? "connect_timeout_ice" : "connect_timeout_lan",
-      is_ice
-          ? "Could not establish an online connection to the other "
-            "player within 30 seconds.\n\nAllow the game through the "
-            "Windows firewall, make sure both players are still in the "
-            "lobby, then rejoin and retry."
-          : "Could not establish a direct connection to the other "
-            "player within 30 seconds.\n\nCheck the lobby address, "
-            "firewall, and that both players are still connected, then "
-            "rejoin and retry.");
+  NetplayReportError(snes_host_connect_timeout_error_code(is_ice),
+                     snes_host_connect_timeout_message(is_ice));
 }
 
 /* Thin wrapper — admit / connect-wait clock live in snes_host_barrier_admit. */
