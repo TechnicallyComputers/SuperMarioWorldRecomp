@@ -26,6 +26,10 @@ Example:
 
   powershell -File tools\make_release.ps1 -Version 0.9.0 -Variant coop `
     -BuildDir build-recompui -RuntimeBinDir C:\msys64\mingw64\bin
+
+Linux MinGW cross packaging: tools/make_release.sh (defaults RuntimeBinDir to
+/usr/x86_64-w64-mingw32/bin). recomp_ui.cmake also POST_BUILD-stages these
+DLLs next to the .exe when CMAKE is MinGW.
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Version,
@@ -90,16 +94,23 @@ if (Test-Path -LiteralPath $kb) {
 (Get-Content (Join-Path $root 'config.ini')) -replace '^Widescreen\s*=.*$', 'Widescreen = 0' |
   Out-File (Join-Path $stage 'config.ini') -Encoding ascii
 
+# MinGW CRT + SDL2. libssp-0.dll is required when the toolchain enables
+# -fstack-protector (common for Linux mingw-w64 and current MSYS2 gcc).
 $runtimeDlls = @(
   'SDL2.dll',
   'libgcc_s_seh-1.dll',
   'libstdc++-6.dll',
-  'libwinpthread-1.dll'
+  'libwinpthread-1.dll',
+  'libssp-0.dll'
 )
 foreach ($name in $runtimeDlls) {
+  # Prefer DLLs already staged next to the exe by recomp_ui.cmake POST_BUILD.
+  $staged = Join-Path $build $name
   $source = Join-Path $RuntimeBinDir $name
-  if (-not (Test-Path -LiteralPath $source)) {
-    throw "Required MinGW runtime DLL missing: $source"
+  if (Test-Path -LiteralPath $staged) {
+    $source = $staged
+  } elseif (-not (Test-Path -LiteralPath $source)) {
+    throw "Required MinGW runtime DLL missing: $name (looked in $build and $RuntimeBinDir)"
   }
   Copy-Item -LiteralPath $source -Destination $stage
 }
