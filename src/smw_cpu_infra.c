@@ -7,4 +7,5 @@ const RtlGameInfo kSmwGameInfo = {
   .run_frame = &RunOneFrameOfGame,
   .draw_ppu_frame = &SmwDrawPpuFrame,
   .save_name_prefix = "save",
+  .session_reset = &SmwSessionReset,
 };

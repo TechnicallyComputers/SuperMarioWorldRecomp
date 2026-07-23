@@ -27,6 +27,7 @@
 #ifdef SMW_COOP_BUILD
 #include "coop_patch.h"
 #include "snes_netplay.h"
+#include "snes_host_session.h"
 #include "smw_netplay_lobby.h"
 #endif
 #include "util.h"
@@ -1431,23 +1432,13 @@ int main(int argc, char** argv) {
   int window_height = custom_size ? g_config.window_height : g_current_window_scale * g_snes_height;
 
 session_reboot:
-  /* Soft-return rematch: recomp-ui launcher_platform_close() calls SDL_Quit().
-   * Re-init before recreating the window/audio. First boot already inited
-   * above; skip when subsystems are still live. */
-  if (!SDL_WasInit(SDL_INIT_VIDEO) || !SDL_WasInit(SDL_INIT_AUDIO) ||
-      !SDL_WasInit(SDL_INIT_GAMECONTROLLER)) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) !=
-        0) {
-      host_report_breadcrumb("SDL_Init (session) FAILED: %s", SDL_GetError());
-      printf("Failed to init SDL: %s\n", SDL_GetError());
-      return 1;
-    }
-    host_report_breadcrumb(
-        "SDL session init ok: video=%s audio=%s",
-        SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "(none)",
-        SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "(none)");
-  }
+  /* Soft-return rematch: recomp-ui may have SDL_Quit()'d. */
 #ifdef SMW_COOP_BUILD
+  if (snes_host_ensure_sdl() != 0) {
+    host_report_breadcrumb("SDL_Init (session) FAILED: %s", SDL_GetError());
+    printf("Failed to init SDL: %s\n", SDL_GetError());
+    return 1;
+  }
   /* A rematch is a cold emulation session inside the same process. Lobby and
    * ROM selection survive, while all device/input/session state is rebuilt. */
   memset(&g_gamepad[0], 0, sizeof(g_gamepad[0]));
@@ -1458,11 +1449,20 @@ session_reboot:
   g_paused = 0;
   g_turbo = 0;
   g_netplay_started = 0;
-#endif
-
-  /* Soft-return leaves g_did_reset / g_first_frame_done set. Without this,
-   * rematch skips I_RESET on a fresh SnesInit and LLE stack-dies black. */
+  /* RtlGameInfo.session_reset → SmwSessionReset */
+  snes_host_session_reset();
+#else
+  if (!SDL_WasInit(SDL_INIT_VIDEO) || !SDL_WasInit(SDL_INIT_AUDIO) ||
+      !SDL_WasInit(SDL_INIT_GAMECONTROLLER)) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) !=
+        0) {
+      host_report_breadcrumb("SDL_Init (session) FAILED: %s", SDL_GetError());
+      printf("Failed to init SDL: %s\n", SDL_GetError());
+      return 1;
+    }
+  }
   SmwSessionReset();
+#endif
 
   if (g_config.output_method == kOutputMethod_OpenGL) {
     g_win_flags |= SDL_WINDOW_OPENGL;
@@ -2200,17 +2200,9 @@ static uint16_t CaptureLocalNetplayButtons(void) {
 }
 
 static void NetplaySoftExit(const char *origin) {
-  snes_netplay_shutdown();
-  if (g_netplay_from_lobby) {
-    fprintf(stderr, "smw-coop: netplay ended (%s) - returning to lobby\n",
-            origin ? origin : "?");
-    host_report_breadcrumb("netplay: ended (%s) - returning to lobby",
-                           origin ? origin : "?");
-    snes_netplay_request_return_to_lobby();
-  } else {
-    fprintf(stderr, "smw-coop: netplay ended (%s)\n", origin ? origin : "?");
-    host_report_breadcrumb("netplay: ended (%s)", origin ? origin : "?");
-  }
+  snes_netplay_soft_exit_to_lobby(origin, g_netplay_from_lobby);
+  host_report_breadcrumb("netplay: ended (%s)%s", origin ? origin : "?",
+                         g_netplay_from_lobby ? " - returning to lobby" : "");
 }
 
 static void NetplayReportError(const char *error_code, const char *message) {

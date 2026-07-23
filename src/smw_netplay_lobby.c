@@ -361,11 +361,7 @@ static int MemberGet(void *ctx, int index,
   if (!snes_lobby_member_get(index, &member)) return 0;
   out->slot = member.slot;
   out->ready = member.ready;
-  {
-    const char *host_id = snes_lobby_host_player_id();
-    out->is_host = host_id && host_id[0] &&
-                   strcmp(member.player_id, host_id) == 0;
-  }
+  out->is_host = snes_lobby_member_is_host(&member);
   snprintf(out->display_name, sizeof(out->display_name), "%s",
            member.display_name);
   return 1;
