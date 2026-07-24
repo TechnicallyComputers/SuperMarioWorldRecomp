@@ -566,6 +566,21 @@ static void SdlRenderer_EndDraw(void) {
   SDL_RenderPresent(g_renderer); // vsyncs to 60 FPS?
 }
 
+#ifdef SMW_COOP_BUILD
+/* Re-present last framebuffer without RtlDrawPpuFrame / draw_ppu_frame. */
+static void PresentHeldNetplayFrame(void) {
+  if (g_config.output_method == kOutputMethod_OpenGL) {
+    g_renderer_funcs.EndDraw();
+    return;
+  }
+  if (!g_renderer || !g_texture)
+    return;
+  SDL_RenderClear(g_renderer);
+  SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, NULL);
+  SDL_RenderPresent(g_renderer);
+}
+#endif
+
 static int AdaptiveWidescreenExtraForSize(int drawable_width,
                                           int drawable_height) {
   if (drawable_width <= 0 || drawable_height <= 0)
@@ -1128,6 +1143,13 @@ int main(int argc, char** argv) {
         WriteConfigFile(config_file);
         SmwNetplayLauncherDisconnect();
 #endif
+        /* Setup wizard / Change ROM already write rom.cfg; keep a host-side
+         * write on quit so a path chosen this session survives even if the
+         * launcher cache write was skipped. */
+        if (rom_path_buf[0]) {
+          FILE *rc = fopen("rom.cfg", "w");
+          if (rc) { fprintf(rc, "%s\n", rom_path_buf); fclose(rc); }
+        }
         return 0;  /* user closed the launcher */
       }
       if (act == 0) {
@@ -1762,31 +1784,44 @@ error_reading:;
      * it every frame is safe. */
     RefreshKeybindControllerBits();
 
-    uint32 inputs;
+    uint32 inputs = 0;
 #ifdef SMW_COOP_BUILD
+    int netplay_held_present = 0;
     if (snes_netplay_active()) {
       g_turbo = 0;
       g_paused = 0;
       if (!NetplayBarrierAdmit(&running)) {
         if (!running) break;
-        continue;
-      }
-      inputs = snes_netplay_published_inputs() | snes_netplay_active_mask();
-      RtlRunFrame(inputs);
-      snes_netplay_finish_frame();
-      {
-        static int test_ticks = -1;
-        if (test_ticks < 0) {
-          const char *value = getenv("SNES_NET_TEST_TICKS");
-          test_ticks = value && value[0] ? atoi(value) : 0;
-        }
-        if (test_ticks > 0 &&
-            snes_netplay_sim_tick() >= (uint32_t)test_ticks) {
-          fprintf(stderr, "SNES_NET_TEST_PASS slot=%d tick=%u\n",
-                  snes_netplay_local_slot(),
-                  (unsigned)snes_netplay_sim_tick());
-          snes_netplay_shutdown();
-          running = false;
+        PresentHeldNetplayFrame();
+        netplay_held_present = 1;
+      } else {
+        int burst = 0;
+        for (;;) {
+          inputs = snes_netplay_published_inputs() | snes_netplay_active_mask();
+          RtlRunFrame(inputs);
+          snes_netplay_finish_frame();
+          {
+            static int test_ticks = -1;
+            if (test_ticks < 0) {
+              const char *value = getenv("SNES_NET_TEST_TICKS");
+              test_ticks = value && value[0] ? atoi(value) : 0;
+            }
+            if (test_ticks > 0 &&
+                snes_netplay_sim_tick() >= (uint32_t)test_ticks) {
+              fprintf(stderr, "SNES_NET_TEST_PASS slot=%d tick=%u\n",
+                      snes_netplay_local_slot(),
+                      (unsigned)snes_netplay_sim_tick());
+              snes_netplay_shutdown();
+              running = false;
+              break;
+            }
+          }
+          if (burst >= snes_host_catchup_budget())
+            break;
+          snes_netplay_stage_local(CaptureLocalNetplayButtons());
+          if (!snes_netplay_poll_admit())
+            break;
+          burst++;
         }
       }
     } else
@@ -1801,12 +1836,15 @@ error_reading:;
     }
 
 #ifdef ENABLE_ORACLE_BACKEND
-    // Step the oracle emulator with the same input. First-light does
-    // not guarantee input-bit parity between the runner's 12-bit-per-
-    // player layout and the bridge's SNES-hardware layout — good
-    // enough for attract-demo comparison (no input), needs remapping
-    // work before live gameplay divergence analysis.
+#ifdef SMW_COOP_BUILD
+    if (!netplay_held_present)
+#endif
     {
+      // Step the oracle emulator with the same input. First-light does
+      // not guarantee input-bit parity between the runner's 12-bit-per-
+      // player layout and the bridge's SNES-hardware layout — good
+      // enough for attract-demo comparison (no input), needs remapping
+      // work before live gameplay divergence analysis.
       extern void emu_oracle_run_frame(uint16_t j1, uint16_t j2);
       emu_oracle_run_frame((uint16_t)(inputs & 0xFFF),
                            (uint16_t)((inputs >> 12) & 0xFFF));
@@ -1860,6 +1898,11 @@ error_reading:;
     RtlAudioSetFastForward(g_turbo != 0);
     g_snes->disableRender = g_turbo && (frameCtr & 0xf) != 0;
 
+#ifdef SMW_COOP_BUILD
+    if (netplay_held_present) {
+      /* Stall: already re-presented last texture; do not re-sim PPU/IRQ. */
+    } else
+#endif
     if (!g_snes->disableRender) {
       DrawPpuFrameWithPerf();
     } else {
