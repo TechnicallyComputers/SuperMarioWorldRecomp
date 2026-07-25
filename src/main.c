@@ -1854,10 +1854,30 @@ error_reading:;
     // Bank validation removed — 100% oracle mode, no banks enabled.
 
     frameCtr++;
+#ifdef SMW_COOP_BUILD
+    /* Netplay: breadcrumb off admitted finish_frame count (not PresentHeld
+     * connect-wait wall ticks that used to fire on a still-black window). */
+    if (snes_netplay_active()) {
+      static uint32_t s_last_net_hb;
+      uint32_t sim_frames = snes_netplay_frames_finished();
+      if (sim_frames == 1) {
+        s_last_net_hb = 0;
+        host_report_breadcrumb("first frame simulated");
+      } else if (sim_frames > 0 && (sim_frames % 3600u) == 0 &&
+                 sim_frames != s_last_net_hb) {
+        s_last_net_hb = sim_frames;
+        host_report_breadcrumb("heartbeat: frame=%u", (unsigned)sim_frames);
+      }
+    } else if (frameCtr == 1)
+      host_report_breadcrumb("first frame simulated");
+    else if (frameCtr % 3600 == 0)  /* ~once a minute at 60 fps */
+      host_report_breadcrumb("heartbeat: frame=%u", frameCtr);
+#else
     if (frameCtr == 1)
       host_report_breadcrumb("first frame simulated");
     else if (frameCtr % 3600 == 0)  /* ~once a minute at 60 fps */
       host_report_breadcrumb("heartbeat: frame=%u", frameCtr);
+#endif
     /* Dev-only headless turbo stress (SNESRECOMP_FORCE_TURBO=1): forces the
      * turbo path every frame so an automated soak can exercise the LLE path's
      * turbo-safety (raster-IRQ-on-render-skip) without a human holding Tab.
